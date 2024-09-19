@@ -32,8 +32,14 @@ To run a Brainfuck program using the compiled interpreter, you can use the follo
 
 Replace path/to/your/brainfuck_program.b with the path to the Brainfuck file you want to execute.
 
+To enable the profiler, run the following command:
+
+```bash
+./bf_interp -p < path/to/your/brainfuck_program.b
+```
+
 For timer
 
 ```bash
-time ./bf_interp < mandel.b > /dev/null
+time ./bf_interp < benches/mandel.b > /dev/null
 ```
