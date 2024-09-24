@@ -158,7 +158,20 @@ void analyze_loops(char *buffer, int input_length, int *jump_map, int *loop_coun
 
 
 // Print profiling results
-void print_profiling_results(loop_info_t *simple_loops, int simple_loop_count, loop_info_t *non_simple_loops, int non_simple_loop_count, int total_instructions) {
+void print_profiling_results(int *instruction_counts, loop_info_t *simple_loops, 
+                             int simple_loop_count, loop_info_t *non_simple_loops, 
+                             int non_simple_loop_count, int total_instructions) {
+    // Print Brainfuck instruction occurrences
+    printf("\nInstruction occurrences:\n");
+    printf("  > : %d\n", instruction_counts[(int)'>']);
+    printf("  < : %d\n", instruction_counts[(int)'<']);
+    printf("  + : %d\n", instruction_counts[(int)'+']);
+    printf("  - : %d\n", instruction_counts[(int)'-']);
+    printf("  . : %d\n", instruction_counts[(int)'.']);
+    printf("  , : %d\n", instruction_counts[(int)',']);
+    printf("  [ : %d\n", instruction_counts[(int)'[']);
+    printf("  ] : %d\n", instruction_counts[(int)']']);
+
     // Print simple loops and their counts
     printf("\nSimple loops:\n");
     for (int i = 0; i < simple_loop_count; ++i) {
@@ -180,7 +193,6 @@ void print_profiling_results(loop_info_t *simple_loops, int simple_loop_count, l
     // Print total instructions executed
     printf("\nNormal termination after %d instructions.\n", total_instructions);
 }
-
 int main(int argc, char *argv[]) {
     int profiling_enabled = 0;
     parse_arguments(argc, argv, &profiling_enabled);
@@ -221,72 +233,153 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // Profiling arrays, initialized only if profiling is enabled
-    loop_info_t *simple_loops = NULL;
-    loop_info_t *non_simple_loops = NULL;
-    int *loop_counts = NULL;
-    int simple_loop_count = 0;
-    int non_simple_loop_count = 0;
-    int total_instructions = 0;
-
-    if (profiling_enabled) {
-        simple_loops = calloc(TAPE_SIZE, sizeof(loop_info_t));  // Store simple loop patterns
-        non_simple_loops = calloc(TAPE_SIZE, sizeof(loop_info_t));  // Store non-simple loop patterns
-        loop_counts = calloc(TAPE_SIZE, sizeof(int));  // Count how many times each loop is executed
-    }
-
-    // Modify the loop that processes Brainfuck instructions
-    for (int i = 0; i < input_length; ++i) {
+    if (!profiling_enabled) {
+        // Fast-path version without profiling
+       for (int i = 0; i < input_length; ++i) {
         char instruction = buffer[i];
-
-        // Skip any character that is not a valid Brainfuck instruction
-        if (instruction != '>' && instruction != '<' &&
-            instruction != '+' && instruction != '-' &&
-            instruction != '.' && instruction != ',' &&
-            instruction != '[' && instruction != ']') {
-            continue; // Skip non-instruction characters (comments, spaces, etc.)
+        
+        if (instruction == '>') {
+            int count = 1;
+            while (buffer[i + 1] == '>') { count++; i++; }
+            ptr += count;  // Optimize consecutive '>'
+        } 
+        else if (instruction == '<') {
+            int count = 1;
+            while (buffer[i + 1] == '<') { count++; i++; }
+            ptr -= count;  // Optimize consecutive '<'
         }
-
-        // Count the total number of instructions executed
-        total_instructions++;
-
-        // If profiling is enabled, count the loop executions
-        if (profiling_enabled && (instruction == '[' || instruction == ']')) {
-            loop_counts[i]++;
+        else if (instruction == '+') {
+            int count = 1;
+            while (buffer[i + 1] == '+') { count++; i++; }
+            *ptr += count;  // Optimize consecutive '+'
+        } 
+        else if (instruction == '-') {
+            int count = 1;
+            while (buffer[i + 1] == '-') { count++; i++; }
+            *ptr -= count;  // Optimize consecutive '-'
         }
-
-        // Execute valid Brainfuck instructions
-        switch (instruction) {
-            case '>': ++ptr; break;
-            case '<': --ptr; break;
-            case '+': ++*ptr; break;
-            case '-': --*ptr; break;
-            case '.':
-                buffered_put(*ptr, output_buffer, &output_index);
-                break;
-            case ',':
-                *ptr = getchar();
-                break;
-            case '[':
-                if (!*ptr) i = jump_map[i];
-                break;
-            case ']':
-                if (*ptr) i = jump_map[i];
-                break;
+        else if (instruction == '.') {
+            int count = 1;
+            buffered_put(*ptr, output_buffer, &output_index);
+            while (buffer[i + 1] == '.') { 
+                i++; 
+                buffered_put(*ptr, output_buffer, &output_index);  // Optimize consecutive '.'
+            }
+        }
+        else if (instruction == ',') {
+            *ptr = getchar();
+        }
+        else if (instruction == '[' && buffer[i+1] == '-' && buffer[i+2] == ']') {
+            // Special case optimization for [-], clear the current cell
+            *ptr = 0;
+            i += 2;  // Skip past '-]'
+        }
+        else if (instruction == '[') {
+            if (!*ptr) {
+                i = jump_map[i];  // Jump to the end of the loop if current cell is zero
+            }
+        } 
+        else if (instruction == ']') {
+            if (*ptr) {
+                i = jump_map[i];  // Jump to the start of the loop if current cell is non-zero
+            }
+        } 
+        else if (instruction == '[' && buffer[i+1] == '>' && buffer[i+2] == '+' && buffer[i+3] == '<' && buffer[i+4] == '-') {
+            // Optimize [->+<] loop which adds current cell to the next cell and sets current cell to zero
+            *(ptr + 1) += *ptr;
+            *ptr = 0;
+            i += 4;  // Skip past ->+<]
         }
     }
+        flush_output(output_buffer, &output_index);
+    } else {
+        // Profiling-enabled path
+        loop_info_t *simple_loops = calloc(TAPE_SIZE, sizeof(loop_info_t));
+        loop_info_t *non_simple_loops = calloc(TAPE_SIZE, sizeof(loop_info_t));
+        int *loop_counts = calloc(input_length, sizeof(int));
+        int simple_loop_count = 0;
+        int non_simple_loop_count = 0;
+        int total_instructions = 0;
+        int instruction_counts[256] = {0}; // Track instruction occurrences
 
-    flush_output(output_buffer, &output_index);
+        for (int i = 0; i < input_length; ++i) {
+            char instruction = buffer[i];
+            count_instructions(instruction_counts, instruction);
+            total_instructions++;
 
-    if (profiling_enabled) {
+            if (instruction == '[' || instruction == ']') {
+                loop_counts[i]++;
+            }
+
+           if (instruction == '>') {
+            int count = 1;
+            while (buffer[i + 1] == '>') { count++; i++; }
+            ptr += count;  // Optimize consecutive '>'
+        } 
+        else if (instruction == '<') {
+            int count = 1;
+            while (buffer[i + 1] == '<') { count++; i++; }
+            ptr -= count;  // Optimize consecutive '<'
+        }
+        else if (instruction == '+') {
+            int count = 1;
+            while (buffer[i + 1] == '+') { count++; i++; }
+            *ptr += count;  // Optimize consecutive '+'
+        } 
+        else if (instruction == '-') {
+            int count = 1;
+            while (buffer[i + 1] == '-') { count++; i++; }
+            *ptr -= count;  // Optimize consecutive '-'
+        }
+        else if (instruction == '.') {
+            int count = 1;
+            buffered_put(*ptr, output_buffer, &output_index);
+            while (buffer[i + 1] == '.') { 
+                i++; 
+                buffered_put(*ptr, output_buffer, &output_index);  // Optimize consecutive '.'
+            }
+        }
+        else if (instruction == ',') {
+            *ptr = getchar();
+        }
+        else if (instruction == '[' && buffer[i+1] == '-' && buffer[i+2] == ']') {
+            // Special case optimization for [-], clear the current cell
+            *ptr = 0;
+            i += 2;  // Skip past '-]'
+        }
+        else if (instruction == '[') {
+            if (!*ptr) {
+                i = jump_map[i];  // Jump to the end of the loop if current cell is zero
+            }
+        } 
+        else if (instruction == ']') {
+            if (*ptr) {
+                i = jump_map[i];  // Jump to the start of the loop if current cell is non-zero
+            }
+        } 
+        else if (instruction == '[' && buffer[i+1] == '>' && buffer[i+2] == '+' && buffer[i+3] == '<' && buffer[i+4] == '-') {
+            // Optimize [->+<] loop which adds current cell to the next cell and sets current cell to zero
+            *(ptr + 1) += *ptr;
+            *ptr = 0;
+            i += 4;  // Skip past ->+<]
+        }
+
+            
+        }
+
+
+        flush_output(output_buffer, &output_index);
         analyze_loops(buffer, input_length, jump_map, loop_counts, &simple_loops, &non_simple_loops, &simple_loop_count, &non_simple_loop_count);
-        print_profiling_results(simple_loops, simple_loop_count, non_simple_loops, non_simple_loop_count, total_instructions);
+        print_profiling_results(instruction_counts, simple_loops, simple_loop_count, non_simple_loops, non_simple_loop_count, total_instructions);
+        
         free(loop_counts);
         free(simple_loops);
         free(non_simple_loops);
     }
 
+    
     free(buffer);
     free(jump_map);
     return 0;
 }
+
