@@ -47,7 +47,7 @@ time ./bf_interp < benches/mandel.b > /dev/null
 ## Usase of the Compiler for bf program on a x86-64 machine
 
 ```bash
-chmod +x bf_compiler/run.sh
+chmod +x bf_compiler/run_compiler.sh
 
-./bf_compiler/run.sh path/to/bf/file
+./bf_compiler/run_compiler.sh path/to/bf/file
 ```
