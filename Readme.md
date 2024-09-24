@@ -43,3 +43,11 @@ For timer
 ```bash
 time ./bf_interp < benches/mandel.b > /dev/null
 ```
+
+## Usase of the Compiler for bf program on a x86-64 machine
+
+```bash
+chmod +x bf_compiler/run.sh
+
+./bf_compiler/run.sh path/to/bf/file
+```
