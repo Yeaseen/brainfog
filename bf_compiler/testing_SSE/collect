@@ -1,0 +1,271 @@
+loop_start:
+    mov %rsi, %rdi
+    sub $16, %rdi
+    lea tape(%rip), %rax       # Load address of tape start into %rax for comparison
+    cmp %rdi, %rax
+    jae load_xmm0              # Jump to load xmm0 if %rdi is after start of tape
+    mov %rax, %rdi             # Adjust %rdi to point to start of tape if not
+
+load_xmm0:
+    movdqu (%rdi), %xmm0       # Load 16 bytes into xmm0 from %rdi
+    pxor %xmm1, %xmm1
+    pcmpeqb %xmm1, %xmm0
+    pmovmskb %xmm0, %eax
+    #bsf %eax, %eax
+    #-->
+    not %eax
+    lzcntl %eax, %eax
+    mov $31, %ecx
+    sub %eax, %ecx
+    #-->
+    sub %rax, %rsi
+
+==============================================
+.global _start
+.section .bss
+tape: .space 30000
+.section .text
+_start:
+lea tape(%rip), %rsi
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+loop_start_0:
+movb (%rsi), %al
+test %al, %al
+jz loop_end_0
+addq $1, %rsi
+addq $1, %rsi
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+subq $1, %rsi
+subq $1, %rsi
+movb (%rsi), %al
+subb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+test %al, %al
+jnz loop_start_0
+loop_end_0:
+addq $1, %rsi
+addq $1, %rsi
+mov $1, %rax
+mov $1, %rdi
+mov %rsi, %rsi
+mov $1, %rdx
+syscall
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+loop_start_1:
+movb (%rsi), %al
+test %al, %al
+jz loop_end_1
+addq $1, %rsi
+addq $1, %rsi
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+subq $1, %rsi
+subq $1, %rsi
+movb (%rsi), %al
+subb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+test %al, %al
+jnz loop_start_1
+loop_end_1:
+addq $1, %rsi
+addq $1, %rsi
+mov $1, %rax
+mov $1, %rdi
+mov %rsi, %rsi
+mov $1, %rdx
+syscall
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+loop_start_2:
+movb (%rsi), %al
+test %al, %al
+jz loop_end_2
+addq $1, %rsi
+addq $1, %rsi
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+addb $1, %al
+movb %al, (%rsi)
+subq $1, %rsi
+subq $1, %rsi
+movb (%rsi), %al
+subb $1, %al
+movb %al, (%rsi)
+movb (%rsi), %al
+test %al, %al
+jnz loop_start_2
+loop_end_2:
+addq $1, %rsi
+addq $1, %rsi
+
+#the following loop we want to modify
+
+loop_start:
+    mov %rsi, %rdi             # Copy current position to %rdi for checking
+    sub $16, %rdi              # Move back 16 bytes to check previous block
+    lea tape(%rip), %rax       # Load address of tape start into %rax for comparison
+    cmp %rdi, %rax             # Compare if %rdi is before the start of the tape
+    jae load_xmm0              # Jump to load xmm0 if %rdi is after start of tape
+    lea tape(%rip), %rdi       # Adjust %rdi to the start of tape if %rdi is before start
+
+load_xmm0:
+    movdqu (%rdi), %xmm0       # Load 16 bytes into xmm0 from %rdi
+    pxor %xmm1, %xmm1          # Set xmm1 to zeros for comparison
+    pcmpeqb %xmm1, %xmm0       # Compare each byte in xmm0 to zero
+    pmovmskb %xmm0, %eax       # Create a bitmask from comparison results
+    not %eax                   # Invert the bitmask so zeros become ones
+    lzcntl %eax, %eax          # Count leading zeros to find the first set bit
+    test %eax, %eax            # Check if a zero byte was found
+    jz found_zero              # Exit loop if zero was found
+    sub $16, %rsi              # Move %rsi 16 bytes back for next loop iteration
+    jmp loop_start
+
+found_zero:
+    mov $31, %ecx              # Load 31 into %ecx
+    sub %eax, %ecx             # Calculate the index of the first zero bit
+    sub %rax, %rsi             # Adjust %rsi to point to the first zero byte found
+
+
+mov $1, %rax
+mov $1, %rdi
+mov %rsi, %rsi
+mov $1, %rdx
+syscall
+mov $60, %rax
+xor %rdi, %rdi
+syscall
