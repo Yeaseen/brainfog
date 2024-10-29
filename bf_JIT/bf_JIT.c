@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <assert.h>
+#include <sys/mman.h>
+#include <unistd.h>
+#include <fcntl.h>
 #define TAPE_SIZE 30000
 
 // Global variables to store metadata for `$` optimizations
@@ -13,17 +17,25 @@ typedef struct {
 LoopInfo loop_info_array[256];  // Store metadata for up to 256 loops
 int loop_info_index = 0;        // Index to track the number of loops
 
-#define MAX_OFFSETS 100  // Maximum offsets to track within a loop
-#define MAX_LOOPS 256    // Maximum number of simple loops
+#define MAX_SIMPLE_LOOPS 1000
+#define MAX_OFFSETS 50  // Maximum number of offsets we'll track for a simple loop
 
+// Struct to hold an offset and its corresponding net value change
 typedef struct {
-    size_t position;      // Position of '#' in the Brainfuck code
-    int changes[MAX_OFFSETS];  // Net changes at each offset (index = offset, value = net change)
-    int totalOffsets;     // Total number of unique offsets modified in the loop
+    int offset;      // Relative position from the starting pointer position
+    int net_change;  // Net change in value at this offset
+} OffsetChange;
+
+// Struct to hold simple loop information
+typedef struct {
+    int position;            // Starting position of the loop in the code
+    int totalOffsets;        // Number of unique offsets in the loop
+    OffsetChange changes[MAX_OFFSETS];  // Array to hold changes at different offsets
 } SimpleLoopInfo;
 
-SimpleLoopInfo simple_loop_info_array[MAX_LOOPS];  // Array to store simple loop information
-int simple_loop_info_index = 0;  // Index to track the number of simple loops
+// Array to store all detected simple loops
+SimpleLoopInfo simple_loop_info_array[MAX_SIMPLE_LOOPS];
+int simple_loop_info_index = 0;
 
 
 // Function to read the Brainfuck source code from file, filtering out invalid characters
@@ -71,17 +83,23 @@ int* create_jump_map(const char *bf_source, size_t bf_size) {
         return NULL;
     }
 
-    int stack[256];  // Stack to handle matching brackets
+    // Initialize jump map to -1 to indicate unassigned positions
+    for (size_t i = 0; i < bf_size; ++i) {
+        jump_map[i] = -1;
+    }
+
+    // Stack to handle matching brackets
+    int stack[256];
     int stack_ptr = 0;
 
     for (size_t i = 0; i < bf_size; ++i) {
         if (bf_source[i] == '[') {
-            stack[stack_ptr++] = i;  // Push the position of '[' onto the stack
             if (stack_ptr >= 256) {
-                fprintf(stderr, "Error: Bracket nesting exceeds maximum stack size\n");
+                fprintf(stderr, "Error: Stack overflow - bracket nesting too deep at position %zu\n", i);
                 free(jump_map);
                 return NULL;
             }
+            stack[stack_ptr++] = i;  // Push the position of '[' onto the stack
         } else if (bf_source[i] == ']') {
             if (stack_ptr == 0) {
                 fprintf(stderr, "Error: Unmatched ']' at position %zu\n", i);
@@ -94,96 +112,128 @@ int* create_jump_map(const char *bf_source, size_t bf_size) {
         }
     }
 
+    // If stack_ptr is not 0, then there are unmatched '[' brackets
     if (stack_ptr != 0) {
         fprintf(stderr, "Error: Unmatched '[' in input\n");
         free(jump_map);
         return NULL;
     }
 
+    // Print and validate the jump map for correctness
+    for (size_t i = 0; i < bf_size; ++i) {
+        if (bf_source[i] == '[' || bf_source[i] == ']') {
+            if (jump_map[i] == -1 || jump_map[i] < 0 || jump_map[i] >= bf_size) {
+                fprintf(stderr, "Error: Invalid jump map entry at index %zu. Jump map value: %d\n", i, jump_map[i]);
+                free(jump_map);
+                return NULL;
+            }
+            //printf("Index %zu: %c maps to %d\n", i, bf_source[i], jump_map[i]);
+        }
+    }
+
     return jump_map;
 }
 
 
-void normalize_bf_code(char *buffer, size_t *input_length) {
-    size_t j = 0;
-    for (size_t i = 0; i < *input_length; ++i) {
-        char c = buffer[i];
-        if (c == '>' || c == '<' || c == '+' || c == '-' || c == '.' || c == ',' || c == '[' || c == ']' || c == '#' || c == '$') {
-            buffer[j++] = c;
+
+// Function to find or create an entry for a given offset in a SimpleLoopInfo struct
+void add_or_update_offset(SimpleLoopInfo *loop_info, int pointerPosition) {
+    int found = 0;
+    for (int k = 0; k < loop_info->totalOffsets; ++k) {
+        if (loop_info->changes[k].offset == pointerPosition) {
+            found = 1;
+            break;
         }
     }
-    buffer[j] = '\0'; // Null terminate the normalized code
-    *input_length = j; // Update the input length after removing unnecessary characters
-    // Print the normalized Brainfuck code after each normalization pass
-    //printf("Updated BF program: %s\n", buffer);
+    // If not found, add a new offset entry with a net change of 0 (default value)
+    if (!found) {
+        loop_info->changes[loop_info->totalOffsets].offset = pointerPosition;
+        loop_info->changes[loop_info->totalOffsets].net_change = 0;
+        loop_info->totalOffsets++;
+    }
 }
 
-
-
-
-
-
+// Function to optimize simple loops by replacing them with '#'
 void optimize_simple_loops(char *buffer, int *jump_map, size_t *input_length) {
     for (size_t i = 0; i < *input_length; ++i) {
         if (buffer[i] == '[') {  // Start of a loop
             int loop_end = jump_map[i];
-            int pointerPosition = 0;  // Track pointer movements
-            int netChangeAtStart = 0;  // Track changes at starting position
-            int isSimple = 1;  // Assume loop is simple until proven otherwise
 
-            SimpleLoopInfo newSimpleLoopInfo = { .position = i, .totalOffsets = 1 };  // Start with initial position as one offset
-            memset(newSimpleLoopInfo.changes, 0, sizeof(newSimpleLoopInfo.changes));  // Initialize net changes to zero
+            // Initialize variables to track loop properties
+            int pointerPosition = 0;  
+            int netChangeAtStart = 0;  
+            int isSimple = 1;  
+            int contains_io = 0;  
+            int contains_inner_loop = 0;
 
+            SimpleLoopInfo newSimpleLoopInfo = { .position = i, .totalOffsets = 0 };
+
+            // Analyze the loop to determine its behavior
             for (int j = i + 1; j < loop_end; ++j) {
-                char c = buffer[j];
-                switch (c) {
-                    case '>':  // Increment pointer position and track new offset
-                        pointerPosition++;
-                        if (pointerPosition >= newSimpleLoopInfo.totalOffsets) {
-                            newSimpleLoopInfo.totalOffsets++;  // Increment total offsets only when moving right and increasing unique offsets
+                if (buffer[j] == '>') {
+                    pointerPosition++;
+                    add_or_update_offset(&newSimpleLoopInfo, pointerPosition);  // Track the offset
+                } else if (buffer[j] == '<') {
+                    pointerPosition--;
+                    add_or_update_offset(&newSimpleLoopInfo, pointerPosition);  // Track the offset
+                } else if (buffer[j] == '+') {
+                    add_or_update_offset(&newSimpleLoopInfo, pointerPosition);  // Ensure offset exists
+                    for (int k = 0; k < newSimpleLoopInfo.totalOffsets; ++k) {
+                        if (newSimpleLoopInfo.changes[k].offset == pointerPosition) {
+                            newSimpleLoopInfo.changes[k].net_change++;
+                            break;
                         }
-                        break;
-                    case '<':  // Decrement pointer position without changing unique offset count
-                        pointerPosition--;
-                        break;
-                    case '+':  // Increment value at current position
-                        newSimpleLoopInfo.changes[pointerPosition]++;
-                        if (pointerPosition == 0) netChangeAtStart++;
-                        break;
-                    case '-':  // Decrement value at current position
-                        newSimpleLoopInfo.changes[pointerPosition]--;
-                        if (pointerPosition == 0) netChangeAtStart--;
-                        break;
-                    case '[':
-                    case ']':
-                    case '.':
-                    case ',':
-                        isSimple = 0;  // Disqualify the loop if it contains nested loops or I/O
-                        break;
+                    }
+                    if (pointerPosition == 0) netChangeAtStart++;
+                } else if (buffer[j] == '-') {
+                    add_or_update_offset(&newSimpleLoopInfo, pointerPosition);  // Ensure offset exists
+                    for (int k = 0; k < newSimpleLoopInfo.totalOffsets; ++k) {
+                        if (newSimpleLoopInfo.changes[k].offset == pointerPosition) {
+                            newSimpleLoopInfo.changes[k].net_change--;
+                            break;
+                        }
+                    }
+                    if (pointerPosition == 0) netChangeAtStart--;
+                } else if (buffer[j] == '.' || buffer[j] == ',') {
+                    contains_io = 1;  // I/O disqualifies the loop from being simple
+                    break;
+                } else if (buffer[j] == '[') {
+                    contains_inner_loop = 1;  // Inner loop found
+                    break;
                 }
             }
 
-            // Check if the loop is simple based on criteria
-            if (isSimple && pointerPosition == 0 && (netChangeAtStart == 1 || netChangeAtStart == -1)) {
+            // Skip loops that contain I/O or inner loops
+            if (contains_io || contains_inner_loop) {
+                printf("Skipping complex loop starting at %zu due to I/O or nested loops.\n", i);
+                continue;
+            }
 
-                printf("Simple loop detected at position %zu with %d total offsets.\n", i, newSimpleLoopInfo.totalOffsets);
-                for (int offset = 0; offset < newSimpleLoopInfo.totalOffsets; offset++) {
-                    
-                        printf("  Offset %d -> Net Change: %d\n", offset, newSimpleLoopInfo.changes[offset]);
-                    
-                }
+            // Check if the loop is simple:
+            // - No I/O
+            // - Pointer returns to starting position (pointerPosition == 0)
+            // - The net change at the starting position is exactly +1 or -1
+            if (pointerPosition == 0 && (netChangeAtStart == 1 || netChangeAtStart == -1)) {
+                //printf("Simple loop detected at position %zu with %d total offsets.\n", i, newSimpleLoopInfo.totalOffsets);
+                //for (int offset = 0; offset < newSimpleLoopInfo.totalOffsets; offset++) {
+                //    printf("  Offset %d -> Net Change: %d\n", newSimpleLoopInfo.changes[offset].offset, newSimpleLoopInfo.changes[offset].net_change);
+                //}
+
+                // Save the simple loop info before modifying the buffer
+                simple_loop_info_array[simple_loop_info_index++] = newSimpleLoopInfo;
+
                 // Replace the entire loop with '#'
                 for (int k = i; k <= loop_end; k++) {
                     buffer[k] = ' ';
                 }
                 buffer[i] = '#';  // Mark the start of the optimized loop
-                simple_loop_info_array[simple_loop_info_index++] = newSimpleLoopInfo;
+                
+                // Skip to the end of the loop after optimization to avoid re-processing
+                //i = loop_end;
                 printf("Simple loop optimized at position %zu with %d total offsets.\n", i, newSimpleLoopInfo.totalOffsets);
             }
         }
     }
-
-    printf("Updated BF program: %s\n", buffer);
 }
 
 
@@ -285,6 +335,7 @@ void generate_assembly(const char *bf_source, size_t bf_size, FILE *out) {
                 fprintf(out, "movb %%al, (%%rsi)\n");
                 break;
             case '.':  // Output the byte at the pointer using write system call
+                //printf("NOT GETTING THE DOST??");
                 fprintf(out, "mov $1, %%rax\n");  // syscall: write
                 fprintf(out, "mov $1, %%rdi\n");  // stdout (file descriptor 1)
                 fprintf(out, "mov %%rsi, %%rsi\n");  // address of the byte in memory
@@ -318,10 +369,9 @@ void generate_assembly(const char *bf_source, size_t bf_size, FILE *out) {
                 fprintf(out, "jnz loop_start_%d\n", loop_id);
                 fprintf(out, "loop_end_%d:\n", loop_id);
                 break;
-            case '#':  // Optimized simple loop -> directly set *ptr = 0
-            
-            printf("Got a simple loop at position: %lu\n", i);
 
+            case '#':  // Optimized simple loop -> directly set *ptr = 0
+            //printf("Have we got a #\n");
             // Retrieve the simple loop information corresponding to this position
             SimpleLoopInfo sli;
             int found = 0;
@@ -340,48 +390,59 @@ void generate_assembly(const char *bf_source, size_t bf_size, FILE *out) {
                 break;
             }
 
-            // Debug: Print information about the simple loop
-            printf("Processing Simple Loop at position %zu with %d total offsets.\n", sli.position, sli.totalOffsets);
-            for (int k = 0; k < sli.totalOffsets; k++) {
-                printf("  Offset %d -> Net Change: %d\n", k, sli.changes[k]);
-            }
-
             // Store the initial value at the current position in %cl
-            fprintf(out, "movb (%%rsi), %%cl\n");
+            
 
-            // Apply the stored net changes to each unique offset
-            for (int offset = 1; offset < sli.totalOffsets; offset++) {
-                printf("O---L------\n");
-                if (sli.changes[offset] != 0) {  // Only update if there is a net change
-                    fprintf(out, "movq %%rsi, %%rax\n");  // Copy the current pointer position
-                    fprintf(out, "addq $%d, %%rax\n", offset);  // Move to the offset position
-                    fprintf(out, "movb (%%rax), %%dl\n");  // Load the byte at the target offset into %dl
-                    fprintf(out, "movb %%cl, %%al\n");  // Move the original value into %al
+            // Apply the stored net changes to each unique offset, skipping the offset 0
+            for (int index = 0; index < sli.totalOffsets; index++) {
+                int offset = sli.changes[index].offset;
+                int net_change = sli.changes[index].net_change;
 
-                    if (sli.changes[offset] > 0) {  // Positive net changes
-                        fprintf(out, "mov $%d, %%bl\n", sli.changes[offset]);  // Load the multiplier into %bl
-                        fprintf(out, "PositiveMultiplyLoop_%lu_%d:\n", i, offset);  // Start of the multiplication loop
-                        fprintf(out, "addb %%al, %%dl\n");  // Add the original value to %dl
-                        fprintf(out, "dec %%bl\n");  // Decrement the multiplier
-                        fprintf(out, "jnz PositiveMultiplyLoop_%lu_%d\n", i, offset);  // Repeat until %bl is zero
-                    } else if (sli.changes[offset] < 0) {  // Negative net changes
-                        int abs_value = -sli.changes[offset];  // Convert to positive value for the loop
-                        fprintf(out, "mov $%d, %%bl\n", abs_value);  // Load the absolute multiplier into %bl
-                        fprintf(out, "NegativeMultiplyLoop_%lu_%d:\n", i, offset);  // Start of the subtraction loop
-                        fprintf(out, "subb %%al, %%dl\n");  // Subtract the original value from %dl
-                        fprintf(out, "dec %%bl\n");  // Decrement the multiplier
-                        fprintf(out, "jnz NegativeMultiplyLoop_%lu_%d\n", i, offset);  // Repeat until %bl is zero
-                    }
-
-                    // Store the updated value back at the offset
-                    fprintf(out, "movb %%dl, (%%rax)\n");
+                if (offset == 0 || net_change == 0) {
+                    // Skip offset 0 or if there's no net change to apply
+                    continue;
                 }
+                fprintf(out, "movb (%%rsi), %%cl\n");
+                // Handle positive and negative offsets relative to %rsi
+                fprintf(out, "movq %%rsi, %%rax\n");  // Copy the current pointer position to %rax
+                if (offset > 0) {
+                    fprintf(out, "addq $%d, %%rax\n", offset);  // Move to the positive offset position
+                } else if (offset < 0) {
+                    fprintf(out, "subq $%d, %%rax\n", -offset);  // Move to the negative offset position
+                }
+
+                fprintf(out, "movb (%%rax), %%dl\n");  // Load the byte at the target offset into %dl
+                fprintf(out, "movb %%cl, %%al\n");  // Move the original value into %al
+
+                if (net_change > 0) {  // Positive net changes
+                    fprintf(out, "mov $%d, %%bl\n", net_change);  // Load the multiplier into %bl
+                    fprintf(out, "PositiveMultiplyLoop_%lu_%d:\n", i, index);  // Start of the multiplication loop
+                    fprintf(out, "addb %%al, %%dl\n");  // Add the original value to %dl
+                    fprintf(out, "dec %%bl\n");  // Decrement the multiplier
+                    fprintf(out, "jnz PositiveMultiplyLoop_%lu_%d\n", i, index);  // Repeat until %bl is zero
+                } else {  // Negative net changes
+                    int abs_value = -net_change;  // Convert to positive value for the loop
+                    fprintf(out, "mov $%d, %%bl\n", abs_value);  // Load the absolute multiplier into %bl
+                    fprintf(out, "NegativeMultiplyLoop_%lu_%d:\n", i, index);  // Start of the subtraction loop
+                    fprintf(out, "subb %%al, %%dl\n");  // Subtract the original value from %dl
+                    fprintf(out, "dec %%bl\n");  // Decrement the multiplier
+                    fprintf(out, "jnz NegativeMultiplyLoop_%lu_%d\n", i, index);  // Repeat until %bl is zero
+                }
+
+                fprintf(out, "movq %%rsi, %%rax\n");  // Copy the current pointer position to %rax
+                if (offset > 0) {
+                    fprintf(out, "addq $%d, %%rax\n", offset);  // Move to the positive offset position
+                } else if (offset < 0) {
+                    fprintf(out, "subq $%d, %%rax\n", -offset);  // Move to the negative offset position
+                }
+                // Store the updated value back at the offset
+                fprintf(out, "movb %%dl, (%%rax)\n");
             }
+
             // After all updates, set the value at the current position to zero as specified
             fprintf(out, "movb $0, (%%rsi)\n");  // Set the byte at the current position to zero
-                
+                        
             break;
-            
             case '$': {  // Optimized non-simple loop -> vectorized memory scan
                 //printf("GOT A # at %lu\n",i);
                 int shift_value = 0;
@@ -437,10 +498,58 @@ void generate_assembly(const char *bf_source, size_t bf_size, FILE *out) {
     fprintf(out, "xor %%rdi, %%rdi\n"); // exit code 0
     fprintf(out, "syscall\n");
 }
+// Assemble the generated assembly code into an object file
+int assemble_code(const char *assembly_file, const char *object_file) {
+    char command[256];
+    snprintf(command, sizeof(command), "gcc -c -o %s %s", object_file, assembly_file);
+    int result = system(command);
+    if (result != 0) {
+        fprintf(stderr, "Error: Assembly failed\n");
+        return 1;
+    }
+    return 0;
+}
+
+// Load the object file into executable memory
+void* load_object_code(const char *object_file, size_t *code_size) {
+    // Open the object file
+    FILE *file = fopen(object_file, "rb");
+    if (!file) {
+        perror("Failed to open object file");
+        return NULL;
+    }
+
+    // Get the size of the object file
+    fseek(file, 0, SEEK_END);
+    *code_size = ftell(file);
+    fseek(file, 0, SEEK_SET);
+
+    // Allocate executable memory for the object code
+    void* exec_memory = mmap(NULL, *code_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                             MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (exec_memory == MAP_FAILED) {
+        perror("mmap");
+        fclose(file);
+        return NULL;
+    }
+
+    // Read the object file into the allocated memory
+    fread(exec_memory, 1, *code_size, file);
+    fclose(file);
+
+    return exec_memory;
+}
+
+// Execute the JIT-compiled code
+void execute_jit_code(void* exec_memory) {
+    // Cast the executable memory to a function pointer and execute it
+    void (*jit_function)() = (void (*)())exec_memory;
+    jit_function();
+}
 
 int main(int argc, char *argv[]) {
-    if (argc < 3) {
-        fprintf(stderr, "Usage: %s <input.bf> -o <output.s>\n", argv[0]);
+    if (argc < 2) {
+        fprintf(stderr, "Usage: %s <input.bf>\n", argv[0]);
         return 1;
     }
 
@@ -448,19 +557,12 @@ int main(int argc, char *argv[]) {
     size_t bf_size;
     char *bf_source = read_bf_file(argv[1], &bf_size);
 
-    // Open the output assembly file for writing
-    FILE *out = fopen(argv[3], "w");
-    if (!out) {
-        perror("Failed to open output assembly file");
-        free(bf_source);
-        return 1;
-    }
+    
 
     // Create jump map
     int *jump_map = create_jump_map(bf_source, bf_size);
     if (!jump_map) {
         free(bf_source);
-        fclose(out);
         return 1;
     }
 
@@ -471,12 +573,51 @@ int main(int argc, char *argv[]) {
     //optimize_non_simple_loops(bf_source, jump_map, &bf_size);
 
     // Generate assembly code
-    generate_assembly(bf_source, bf_size, out);
 
-    // Clean up
-    fclose(out);
-    free(bf_source);
+     // Step 2: Create a temporary file for the assembly code
+    char assembly_filename[] = "/tmp/bf_XXXXXX.s";
+    int assembly_fd = mkstemps(assembly_filename, 2);  // Create temporary assembly file with '.s' suffix
+    if (assembly_fd == -1) {
+        perror("Failed to create temporary assembly file");
+        free(bf_source);
+        return 1;
+    }
+    FILE *assembly_file = fdopen(assembly_fd, "w");
+    if (!assembly_file) {
+        perror("Failed to open temporary assembly file");
+        free(bf_source);
+        return 1;
+    }
+
+    // Step 3: Generate assembly code
+    generate_assembly(bf_source, bf_size, assembly_file);
+    fclose(assembly_file);  // Close the assembly file
+    free(bf_source);  // Free the Brainfuck source code
     free(jump_map);
+
+    // Step 4: Assemble the generated assembly code into an object file
+    char object_filename[] = "/tmp/bf_XXXXXX.o";
+    int object_fd = mkstemps(object_filename, 2);  // Create temporary object file with '.o' suffix
+    close(object_fd);  // We don't need the file descriptor after creating the file
+    if (assemble_code(assembly_filename, object_filename) != 0) {
+        fprintf(stderr, "Failed to assemble the code\n");
+        return 1;
+    }
+
+    // Step 5: Load the object code into executable memory
+    size_t code_size;
+    void* exec_memory = load_object_code(object_filename, &code_size);
+    if (!exec_memory) {
+        return 1;
+    }
+
+    // Step 6: Execute the JIT-compiled code
+    execute_jit_code(exec_memory);
+
+    // Clean up memory and remove temporary files
+    munmap(exec_memory, code_size);
+    unlink(assembly_filename);  // Remove the temporary assembly file
+    unlink(object_filename);    // Remove the temporary object file
 
     return 0;
 }

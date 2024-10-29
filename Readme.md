@@ -44,10 +44,21 @@ For timer
 time ./bf_interp < benches/mandel.b > /dev/null
 ```
 
-## Usase of the Compiler for bf program on a x86-64 machine
+## Usage of the Compiler for bf program on a x86-64 machine
 
 ```bash
 chmod +x bf_compiler/run_compiler.sh
 
 ./bf_compiler/run_compiler.sh path/to/bf/file
+```
+
+## Usage of the JIT compiler for BF PL
+
+```bash
+cd bf_JIT
+
+gcc -O3 bf_JIT.c -o bf_JIT
+
+./bf_JIT <path/to/bf/file>
+
 ```
