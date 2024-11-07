@@ -7,6 +7,8 @@ The Brainfuck interpreter is designed to execute Brainfuck programs, which is a 
 To compile and run the Brainfuck interpreter, you will need:
 
 - GCC (GNU Compiler Collection) or another compatible C compiler
+- CMake (version 3.13 or higher)
+- LLVM (version 16.0 or compatible)
 
 ### Compiling the Interpreter
 
@@ -22,7 +24,7 @@ gcc -O3 bf_interp.c -o bf_interp
 
 This command will create an executable named `bf_interp` in the same directory.
 
-### Running a Brainfuck Program
+### Running a Brainfuck Program using the interpreter
 
 To run a Brainfuck program using the compiled interpreter, you can use the following command:
 
@@ -61,4 +63,21 @@ gcc -O3 bf_JIT.c -o bf_JIT
 
 ./bf_JIT <path/to/bf/file>
 
+```
+
+## Usage of the bf built with llvm
+
+You will file a readme inside the folder `bf_llvm_project`.
+Below is a quick building+running approach.
+
+```bash
+git clone https://github.com/Yeaseen/brainfog.git
+cd brainfog/bf_llvm_project
+mkdir build
+cd build
+cmake ..
+make
+cd ..
+chmod +x bf_run.sh
+./bf_run.sh ../benches/mandel.b
 ```
