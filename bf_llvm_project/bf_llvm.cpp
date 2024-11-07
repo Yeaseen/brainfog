@@ -4,6 +4,10 @@
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/IR/LegacyPassManager.h"
+#include "llvm/Transforms/IPO/PassManagerBuilder.h"
+#include "llvm/Transforms/Scalar.h" // This should include most Scalar passes
+#include "llvm/Transforms/Scalar/GVN.h" // Verify if this is necessary
 #include <iostream>
 #include <stack>
 #include <memory>
@@ -141,42 +145,60 @@ void generateLLVM(const string& code) {
         }
     }
 
-    // Return 0 from main
+   
     Builder.CreateRet(ConstantInt::get(Type::getInt32Ty(Context), 0));
-}
 
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        cerr << "Usage: " << argv[0] << " <brainfuck_code_file>" << endl;
-        return 1;
-    }
+    // Setup optimization
+    legacy::FunctionPassManager FPM(ModulePtr.get());
+    legacy::PassManager PM;
 
-    // Read Brainfuck code from file
-    ifstream bf_file(argv[1]);
-    if (!bf_file.is_open()) {
-        cerr << "Error: Unable to open file " << argv[1] << endl;
-        return 1;
-    }
+    // Populate pass managers
+    PassManagerBuilder PMBuilder;
+    PMBuilder.OptLevel = 2; // Use 3 for -O3 level optimizations
+    PMBuilder.populateFunctionPassManager(FPM);
+    PMBuilder.populateModulePassManager(PM);
 
-    string code((istreambuf_iterator<char>(bf_file)), istreambuf_iterator<char>());
-    bf_file.close();
+    // Add necessary passes
+    FPM.doInitialization();
+    for (Function &F : *ModulePtr)
+        FPM.run(F);
+    FPM.doFinalization();
 
-    generateLLVM(code);
+    PM.run(*ModulePtr);
 
-    // Verify the module and write LLVM IR to an output file
+    // Verify and output the module
     std::error_code EC;
     raw_fd_ostream dest("output.ll", EC, sys::fs::OF_None);
     if (EC) {
-        cerr << "Could not open file: " << EC.message() << endl;
-        return 1;
+        std::cerr << "Could not open file: " << EC.message() << std::endl;
+        return;
     }
 
     if (verifyModule(*ModulePtr, &errs())) {
-        cerr << "Error: Module verification failed." << endl;
-        return 1;
+        std::cerr << "Error: Module verification failed." << std::endl;
+        return;
     }
 
     ModulePtr->print(dest, nullptr);
     dest.close();
+}
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        std::cerr << "Usage: " << argv[0] << " <brainfuck_code_file>" << std::endl;
+        return 1;
+    }
+
+    std::ifstream bf_file(argv[1]);
+    if (!bf_file.is_open()) {
+        std::cerr << "Error: Unable to open file " << argv[1] << std::endl;
+        return 1;
+    }
+
+    std::string code((std::istreambuf_iterator<char>(bf_file)), std::istreambuf_iterator<char>());
+    bf_file.close();
+
+    generateLLVM(code);
+
     return 0;
 }
